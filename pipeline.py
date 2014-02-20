@@ -183,7 +183,7 @@ class WgetArgs(object):
             video_id_str = '{0:x}'.format(video_id_num)
 
             wget_args.append('http://www.viddler.com/v/%s' % video_id_str)
-            wget_args.append('http://www.viddler.com/file/%s/html5/' % video_id_str)
+            wget_args.append('http://www.viddler.com/file/%s/html5' % video_id_str)
 
         if 'bind_address' in globals():
             wget_args.extend(['--bind-address', globals()['bind_address']])
