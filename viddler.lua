@@ -10,6 +10,11 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
   -- We're okay; sleep a bit (if we have to) and continue
   local sleep_time = 0.1 * (math.random(75, 125) / 100.0)
 
+  if string.match(url["url"], "com/v/")
+  then
+    -- There's no time to sleep during brute force
+    sleep_time = 0
+  end
 
   if string.match(url["host"], "cdn")
   then
