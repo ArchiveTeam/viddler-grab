@@ -1,3 +1,5 @@
+local url_count = 0
+
 wget.callbacks.httploop_result = function(url, err, http_stat)
   -- NEW for 2014: Slightly more verbose messages because people keep
   -- complaining that it's not moving or not working
@@ -19,5 +21,42 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
     os.execute("sleep " .. sleep_time)
   end
 
+  if (string.match(url["path"], "%.flv") or string.match(url["path"], "%.mp4"))
+  and http_stat["statcode"] == 403 then
+    io.stdout:write("Error: Got 403 on a video download.")
+    io.stdout:flush()
+    return wget.actions.ABORT
+  end
+
   return wget.actions.NOTHING
+end
+
+
+wget.callbacks.get_urls = function(file, url, is_css, iri)
+  local urls = {}
+
+  if string.match(url, "com/embed/[a-fA-F0-9]+") then
+    local video_id = string.match(url, "com/embed/([a-fA-F0-9]+)")
+
+    local command = './riddler.py --wget '.. video_id
+    io.stdout:write("\n")
+    io.stdout:flush()
+
+    local file = assert(io.popen(command, 'r'))
+    local video_urls = file:read('*all')
+    file:close()
+
+    for video_url in video_urls:gmatch("%S+") do
+      io.stdout:write(" Got video URL '"..video_url.."'\n")
+      io.stdout:flush()
+
+      table.insert(urls, {
+        url=video_url
+      })
+
+      video_found = true
+    end
+  end
+
+  return urls
 end
