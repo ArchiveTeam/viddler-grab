@@ -37,6 +37,12 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
 
   if string.match(url, "com/embed/[a-fA-F0-9]+") then
     local video_id = string.match(url, "com/embed/([a-fA-F0-9]+)")
+    
+    local video_url = 'http://www.viddler.com/file/'..video_id..'html5'
+
+    table.insert(urls, {
+      url=video_url
+    })
 
     local command = './riddler.py --wget '.. video_id
     io.stdout:write("\n")
