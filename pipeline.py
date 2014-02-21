@@ -1,10 +1,13 @@
 import datetime
 from distutils.version import StrictVersion
+import glob
 import hashlib
+import json
 import os
+import re
 import seesaw
 from seesaw.config import NumberConfigValue, realize
-from seesaw.externalprocess import WgetDownload
+from seesaw.externalprocess import WgetDownload, RsyncUpload, CurlUpload
 from seesaw.item import ItemInterpolation, ItemValue
 from seesaw.pipeline import Pipeline
 from seesaw.project import Project
@@ -119,7 +122,23 @@ class MoveFiles(SimpleTask):
         os.rename("%(item_dir)s/%(warc_file_base)s.warc.gz" % item,
               "%(data_dir)s/%(warc_file_base)s.warc.gz" % item)
 
+        files_to_upload = ["%(data_dir)s/%(warc_file_base)s.warc.gz" % item]
+
+        extra_filenames = self.find_extra_files(item)
+
+        for extra_filename in extra_filenames:
+            dirname, filename = os.path.split(extra_filename)
+            new_path = os.path.join("%(data_dir)s" % item, filename)
+
+            os.rename(extra_filename, new_path)
+            files_to_upload.append(new_path)
+
+        item['files_to_upload'] = files_to_upload
+
         shutil.rmtree("%(item_dir)s" % item)
+
+    def find_extra_files(self, item):
+        return glob.glob("%(item_dir)s/viddler_amf.*.warc.gz" % item)
 
 
 def get_hash(filename):
@@ -139,6 +158,57 @@ def stats_id_function(item):
         'lua_hash': LUA_SHA1,
         'python_version': sys.version,
     }
+
+
+class CustomUploadWithTracker(UploadWithTracker):
+    def process_body(self, body, item):
+        data = json.loads(body)
+        if "upload_target" in data:
+            inner_task = None
+
+            if re.match(r"^rsync://", data["upload_target"]):
+                item.log_output("Uploading with Rsync to %s" % data["upload_target"])
+                inner_task = RsyncUpload(data["upload_target"], realize(self.files, item), target_source_path=self.rsync_target_source_path, bwlimit=self.rsync_bwlimit, extra_args=self.rsync_extra_args, max_tries=1)
+
+            elif re.match(r"^https?://", data["upload_target"]):
+                item.log_output("Uploading with Curl to %s" % data["upload_target"])
+
+                if len(self.files) != 1:
+                    item.log_output("Curl expects to upload a single file.")
+                    self.fail_item(item)
+                    return
+
+                inner_task = CurlUpload(data["upload_target"], self.files[0], self.curl_connect_timeout, self.curl_speed_limit, self.curl_speed_time, max_tries=1)
+
+            else:
+                item.log_output("Received invalid upload type.")
+                self.fail_item(item)
+                return
+
+            inner_task.on_complete_item += self._inner_task_complete_item
+            inner_task.on_fail_item += self._inner_task_fail_item
+            inner_task.enqueue(item)
+
+        else:
+            item.log_output("Tracker did not provide an upload target.")
+            self.schedule_retry(item)
+
+
+class CustomPrepareStatsForTracker(PrepareStatsForTracker):
+    def process(self, item):
+        total_bytes = {}
+        for (group, files) in self.file_groups.iteritems():
+            total_bytes[group] = sum([os.path.getsize(realize(f, item)) for f in realize(files, item)])
+
+        stats = {}
+        stats.update(self.defaults)
+        stats["item"] = item["item_name"]
+        stats["bytes"] = total_bytes
+
+        if self.id_function:
+            stats["id"] = self.id_function(item)
+
+        item["stats"] = realize(stats, item)
 
 
 class WgetArgs(object):
@@ -225,26 +295,25 @@ pipeline = Pipeline(
         accept_on_exit_code=[0, 8],
         env={
             'item_name': ItemValue("item_name"),
+            'item_dir': ItemValue("item_dir"),
         }
     ),
-    PrepareStatsForTracker(
+    MoveFiles(),
+    CustomPrepareStatsForTracker(
         defaults={"downloader": downloader, "version": VERSION},
         file_groups={
-            "data": [ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz")]
+            "data": ItemValue("files_to_upload")
         },
         id_function=stats_id_function,
     ),
-    MoveFiles(),
     LimitConcurrent(NumberConfigValue(min=1, max=4, default="1",
         name="shared:rsync_threads", title="Rsync threads",
         description="The maximum number of concurrent uploads."),
-        UploadWithTracker(
+        CustomUploadWithTracker(
             "http://%s/%s" % (TRACKER_HOST, TRACKER_ID),
             downloader=downloader,
             version=VERSION,
-            files=[
-                ItemInterpolation("%(data_dir)s/%(warc_file_base)s.warc.gz"),
-                ],
+            files=ItemValue("files_to_upload"),
             rsync_target_source_path=ItemInterpolation("%(data_dir)s/"),
             rsync_extra_args=[
                 "--recursive",
