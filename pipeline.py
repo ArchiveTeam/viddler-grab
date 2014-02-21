@@ -50,6 +50,14 @@ if not WGET_LUA:
     raise Exception("No usable Wget+Lua found.")
 
 
+def check_imports():
+    import pyamf.remoting
+    from Crypto.Cipher import Blowfish
+
+
+check_imports()
+
+
 ###########################################################################
 # The version number of this pipeline definition.
 #
